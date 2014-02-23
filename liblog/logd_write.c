@@ -85,7 +85,17 @@ int __android_log_dev_available(void)
 static int __write_to_log_null(log_id_t log_fd __unused, struct iovec *vec __unused,
                                size_t nr __unused)
 {
+#ifdef ANDROID_GNU_LINUX
+    if (nr == 3) {
+        //int logPrio = *(const char*)vec[0].iov_base;
+        const char* tag = (const char*) vec[1].iov_base;
+        const char* msg = (const char*) vec[2].iov_base;
+        printf("[%s] %s\n", tag, msg);
+    }
+    return 0;
+#else
     return -1;
+#endif
 }
 #endif
 
