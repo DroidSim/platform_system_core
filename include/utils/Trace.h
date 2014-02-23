@@ -17,7 +17,7 @@
 #ifndef ANDROID_TRACE_H
 #define ANDROID_TRACE_H
 
-#ifdef HAVE_ANDROID_OS
+#if defined(HAVE_ANDROID_OS) || defined(ANDROID_GNU_LINUX)
 
 #include <fcntl.h>
 #include <stdint.h>

@@ -300,10 +300,18 @@ void androidSetCreateThreadFunc(android_create_thread_fn func)
     gCreateThreadFn = func;
 }
 
+#ifdef ANDROID_GNU_LINUX
+#include <sys/syscall.h>
+#endif
+
 pid_t androidGetTid()
 {
 #ifdef HAVE_GETTID
+#ifdef ANDROID_GNU_LINUX
+    return syscall(SYS_gettid);
+#else
     return gettid();
+#endif
 #else
     return getpid();
 #endif

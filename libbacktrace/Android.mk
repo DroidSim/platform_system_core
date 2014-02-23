@@ -86,6 +86,10 @@ libbacktrace_ldlibs_host := \
 
 endif
 
+ifeq ($(TARGET_OS),gnu_linux)
+libbacktrace_ldlibs_target := -lpthread
+endif
+
 module := libbacktrace
 module_tag := optional
 build_type := target

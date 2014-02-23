@@ -24,7 +24,9 @@
 #include <sys/types.h>
 #include <cutils/atomic.h>
 #include <cutils/compiler.h>
+#ifndef ANDROID_GNU_LINUX
 #include <cutils/properties.h>
+#endif
 #include <cutils/trace.h>
 
 #define LOG_TAG "cutils-trace"
@@ -59,6 +61,7 @@ void atrace_set_tracing_enabled(bool enabled)
 // values listed in the app_cmdlines property.
 static bool atrace_is_cmdline_match(const char* cmdline)
 {
+#ifndef ANDROID_GNU_LINUX
     char value[PROPERTY_VALUE_MAX];
     char* start = value;
 
@@ -80,11 +83,15 @@ static bool atrace_is_cmdline_match(const char* cmdline)
     }
 
     return false;
+#else
+    return false;
+#endif
 }
 
 // Determine whether application-level tracing is enabled for this process.
 static bool atrace_is_app_tracing_enabled()
 {
+#ifndef ANDROID_GNU_LINUX
     bool sys_debuggable = false;
     bool proc_debuggable = false;
     char value[PROPERTY_VALUE_MAX];
@@ -114,11 +121,15 @@ static bool atrace_is_app_tracing_enabled()
     }
 
     return result;
+#else
+    return false;
+#endif
 }
 
 // Read the sysprop and return the value tags should be set to
 static uint64_t atrace_get_property()
 {
+#ifndef ANDROID_GNU_LINUX
     char value[PROPERTY_VALUE_MAX];
     char *endptr;
     uint64_t tags;
@@ -143,6 +154,9 @@ static uint64_t atrace_get_property()
     }
 
     return (tags | ATRACE_TAG_ALWAYS) & ATRACE_TAG_VALID_MASK;
+#else
+    return 0;
+#endif
 }
 
 // Update tags if tracing is ready. Useful as a sysprop change callback.
@@ -167,6 +181,7 @@ void atrace_update_tags()
 
 static void atrace_init_once()
 {
+#ifndef ANDROID_GNU_LINUX
     atrace_marker_fd = open("/sys/kernel/debug/tracing/trace_marker", O_WRONLY);
     if (atrace_marker_fd == -1) {
         ALOGE("Error opening trace file: %s (%d)", strerror(errno), errno);
@@ -178,6 +193,7 @@ static void atrace_init_once()
 
 done:
     android_atomic_release_store(1, &atrace_is_ready);
+#endif
 }
 
 void atrace_setup()

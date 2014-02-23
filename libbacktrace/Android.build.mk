@@ -60,7 +60,9 @@ LOCAL_LDLIBS := \
     $($(module)_ldlibs_$(build_type)) \
 
 ifeq ($(build_type),target)
+ifneq ($(TARGET_OS),gnu_linux)
   include external/stlport/libstlport.mk
+endif
 
   include $(BUILD_$(build_target))
 endif

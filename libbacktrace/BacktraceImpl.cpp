@@ -30,6 +30,10 @@
 #include "BacktraceLog.h"
 #include "thread_utils.h"
 
+#ifdef ANDROID_GNU_LINUX
+#include <inttypes.h>
+#endif
+
 //-------------------------------------------------------------------------
 // Backtrace functions.
 //-------------------------------------------------------------------------

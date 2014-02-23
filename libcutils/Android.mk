@@ -107,6 +107,11 @@ include $(BUILD_HOST_EXECUTABLE)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := libcutils
+ifeq ($(TARGET_OS),gnu_linux)
+LOCAL_SRC_FILES := $(commonSources) \
+		ashmem-host.c \
+		trace.c
+else
 LOCAL_SRC_FILES := $(commonSources) \
         android_reboot.c \
         ashmem-dev.c \
@@ -117,13 +122,18 @@ LOCAL_SRC_FILES := $(commonSources) \
         qtaguid.c \
         trace.c \
         uevent.c
+endif
 
 ifeq ($(TARGET_ARCH),arm)
     LOCAL_SRC_FILES += arch-arm/memset32.S
 else  # !arm
     ifeq ($(TARGET_ARCH),x86)
+ifeq ($(TARGET_OS),gnu_linux)
+        LOCAL_SRC_FILES += memory.c
+else
         LOCAL_CFLAGS += -DHAVE_MEMSET16 -DHAVE_MEMSET32
         LOCAL_SRC_FILES += arch-x86/android_memset16.S arch-x86/android_memset32.S memory.c
+endif
     else # !x86
         ifeq ($(TARGET_ARCH),mips)
             LOCAL_SRC_FILES += arch-mips/android_memset.c
@@ -146,6 +156,9 @@ LOCAL_WHOLE_STATIC_LIBRARIES := libcutils liblog
 LOCAL_SHARED_LIBRARIES := liblog
 LOCAL_CFLAGS += $(targetSmpFlag)
 LOCAL_C_INCLUDES := $(libcutils_c_includes)
+ifeq ($(TARGET_OS),gnu_linux)
+LOCAL_LDLIBS := -lpthread
+endif
 include $(BUILD_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
