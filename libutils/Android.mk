@@ -100,19 +100,32 @@ ifeq ($(TARGET_ARCH),mips)
 LOCAL_CFLAGS += -DALIGN_DOUBLE
 endif
 
+ifeq ($(TARGET_OS),gnu_linux)
+LOCAL_C_INCLUDES += \
+		external/zlib
+else
 LOCAL_C_INCLUDES += \
 		bionic/libc/private \
 		external/zlib
+endif
 
 LOCAL_STATIC_LIBRARIES := \
 	libcutils
 
+ifeq ($(TARGET_OS),gnu_linux)
+LOCAL_SHARED_LIBRARIES := \
+        libbacktrace \
+        liblog
+else
 LOCAL_SHARED_LIBRARIES := \
         libbacktrace \
         liblog \
         libdl
+endif
 
+ifneq ($(TARGET_OS),gnu_linux)
 include external/stlport/libstlport.mk
+endif
 
 LOCAL_MODULE:= libutils
 include $(BUILD_STATIC_LIBRARY)
@@ -122,13 +135,24 @@ include $(BUILD_STATIC_LIBRARY)
 include $(CLEAR_VARS)
 LOCAL_MODULE:= libutils
 LOCAL_WHOLE_STATIC_LIBRARIES := libutils
+ifeq ($(TARGET_OS),gnu_linux)
+LOCAL_SHARED_LIBRARIES := \
+        libbacktrace \
+        libcutils \
+        liblog
+LOCAL_LDLIBS := -lpthread
+else
 LOCAL_SHARED_LIBRARIES := \
         libbacktrace \
         libcutils \
         libdl \
         liblog \
 
+endif
+
+ifneq ($(TARGET_OS),gnu_linux)
 include external/stlport/libstlport.mk
+endif
 
 include $(BUILD_SHARED_LIBRARY)
 

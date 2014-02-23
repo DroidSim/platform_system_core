@@ -107,6 +107,10 @@ libbacktrace_libc++_static_libraries_host := \
 
 libbacktrace_libc++_libc++ := true
 
+ifeq ($(TARGET_OS),gnu_linux)
+libbacktrace_libc++_ldlibs_target := -lpthread
+endif
+
 module := libbacktrace_libc++
 module_tag := optional
 build_type := target

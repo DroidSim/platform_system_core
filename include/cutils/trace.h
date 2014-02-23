@@ -81,7 +81,7 @@ __BEGIN_DECLS
 #error ATRACE_TAG must be defined to be one of the tags defined in cutils/trace.h
 #endif
 
-#ifdef HAVE_ANDROID_OS
+#if defined(HAVE_ANDROID_OS) || defined(ANDROID_GNU_LINUX)
 /**
  * Maximum size of a message that can be logged to the trace buffer.
  * Note this message includes a tag, the pid, and the string given as the name.
