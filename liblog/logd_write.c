@@ -141,6 +141,9 @@ static int __write_to_log_initialize()
 
 static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
 {
+#ifdef ANDROID_GNU_LINUX
+    return -1;
+#else
     ssize_t ret;
 #if FAKE_LOG_DEVICE
     int log_fd;
@@ -245,6 +248,7 @@ static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
         }
     }
     return ret;
+#endif
 #endif
 }
 
