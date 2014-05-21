@@ -27,13 +27,6 @@ commonSources := \
 	hashmap.c \
 	atomic.c.arm \
 	native_handle.c \
-	socket_inaddr_any_server.c \
-	socket_local_client.c \
-	socket_local_server.c \
-	socket_loopback_client.c \
-	socket_loopback_server.c \
-	socket_network_client.c \
-	sockets.c \
 	config_utils.c \
 	cpu_info.c \
 	load_file.c \
@@ -67,7 +60,15 @@ endif
 ifneq ($(WINDOWS_HOST_ONLY),1)
     commonSources += \
         fs.c \
-        multiuser.c
+        multiuser.c \
+	socket_inaddr_any_server.c \
+	socket_local_client.c \
+	socket_local_server.c \
+	socket_loopback_client.c \
+	socket_loopback_server.c \
+	socket_network_client.c \
+	sockets.c \
+
 endif
 
 
@@ -75,9 +76,11 @@ endif
 # ========================================================
 LOCAL_MODULE := libcutils
 LOCAL_SRC_FILES := $(commonSources) $(commonHostSources) dlmalloc_stubs.c
-LOCAL_LDLIBS := -lpthread
 LOCAL_STATIC_LIBRARIES := liblog
 LOCAL_CFLAGS += $(hostSmpFlag)
+ifneq ($(HOST_OS),windows)
+LOCAL_CFLAGS += -Werror
+endif
 include $(BUILD_HOST_STATIC_LIBRARY)
 
 
@@ -86,9 +89,11 @@ include $(BUILD_HOST_STATIC_LIBRARY)
 include $(CLEAR_VARS)
 LOCAL_MODULE := lib64cutils
 LOCAL_SRC_FILES := $(commonSources) $(commonHostSources) dlmalloc_stubs.c
-LOCAL_LDLIBS := -lpthread
 LOCAL_STATIC_LIBRARIES := lib64log
 LOCAL_CFLAGS += $(hostSmpFlag) -m64
+ifneq ($(HOST_OS),windows)
+LOCAL_CFLAGS += -Werror
+endif
 include $(BUILD_HOST_STATIC_LIBRARY)
 
 # Tests for host
@@ -96,6 +101,9 @@ include $(BUILD_HOST_STATIC_LIBRARY)
 include $(CLEAR_VARS)
 LOCAL_MODULE := tst_str_parms
 LOCAL_CFLAGS += -DTEST_STR_PARMS
+ifneq ($(HOST_OS),windows)
+LOCAL_CFLAGS += -Werror
+endif
 LOCAL_SRC_FILES := str_parms.c hashmap.c memory.c
 LOCAL_STATIC_LIBRARIES := liblog
 LOCAL_MODULE_TAGS := optional
@@ -145,7 +153,7 @@ endif # !arm
 
 LOCAL_C_INCLUDES := $(libcutils_c_includes)
 LOCAL_STATIC_LIBRARIES := liblog
-LOCAL_CFLAGS += $(targetSmpFlag)
+LOCAL_CFLAGS += $(targetSmpFlag) -Werror
 include $(BUILD_STATIC_LIBRARY)
 
 include $(CLEAR_VARS)
@@ -154,7 +162,7 @@ LOCAL_MODULE := libcutils
 # liblog symbols present in libcutils.
 LOCAL_WHOLE_STATIC_LIBRARIES := libcutils liblog
 LOCAL_SHARED_LIBRARIES := liblog
-LOCAL_CFLAGS += $(targetSmpFlag)
+LOCAL_CFLAGS += $(targetSmpFlag) -Werror
 LOCAL_C_INCLUDES := $(libcutils_c_includes)
 ifeq ($(TARGET_OS),gnu_linux)
 LOCAL_LDLIBS := -lpthread
@@ -163,7 +171,7 @@ include $(BUILD_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := tst_str_parms
-LOCAL_CFLAGS += -DTEST_STR_PARMS
+LOCAL_CFLAGS += -DTEST_STR_PARMS -Werror
 LOCAL_SRC_FILES := str_parms.c hashmap.c memory.c
 LOCAL_SHARED_LIBRARIES := liblog
 LOCAL_MODULE_TAGS := optional

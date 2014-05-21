@@ -47,6 +47,14 @@ struct backtrace_frame_data_t {
 // Forward declarations.
 class BacktraceImpl;
 
+#if defined(__APPLE__)
+struct __darwin_ucontext;
+typedef __darwin_ucontext ucontext_t;
+#else
+struct ucontext;
+typedef ucontext ucontext_t;
+#endif
+
 class Backtrace {
 public:
   // Create the correct Backtrace object based on what is to be unwound.
@@ -64,7 +72,7 @@ public:
   virtual ~Backtrace();
 
   // Get the current stack trace and store in the backtrace_ structure.
-  virtual bool Unwind(size_t num_ignore_frames);
+  virtual bool Unwind(size_t num_ignore_frames, ucontext_t* context = NULL);
 
   // Get the function name and offset into the function given the pc.
   // If the string is empty, then no valid function name was found.

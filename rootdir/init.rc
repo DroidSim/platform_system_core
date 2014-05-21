@@ -105,6 +105,13 @@ loglevel 3
     write /proc/sys/kernel/sched_rt_runtime_us 950000
     write /proc/sys/kernel/sched_rt_period_us 1000000
 
+    # reflect fwmark from incoming packets onto generated replies
+    write /proc/sys/net/ipv4/fwmark_reflect 1
+    write /proc/sys/net/ipv6/fwmark_reflect 1
+
+    # set fwmark on accepted sockets
+    write /proc/sys/net/ipv4/tcp_fwmark_accept 1
+
 # Create cgroup mount points for process groups
     mkdir /dev/cpuctl
     mount cgroup none /dev/cpuctl cpu
@@ -372,13 +379,13 @@ on boot
     setprop net.tcp.buffersize.wifi     524288,1048576,2097152,262144,524288,1048576
     setprop net.tcp.buffersize.ethernet 524288,1048576,3145728,524288,1048576,2097152
     setprop net.tcp.buffersize.lte      524288,1048576,2097152,262144,524288,1048576
-    setprop net.tcp.buffersize.umts     4094,87380,110208,4096,16384,110208
-    setprop net.tcp.buffersize.hspa     4094,87380,262144,4096,16384,262144
-    setprop net.tcp.buffersize.hsupa    4094,87380,262144,4096,16384,262144
-    setprop net.tcp.buffersize.hsdpa    4094,87380,262144,4096,16384,262144
-    setprop net.tcp.buffersize.hspap    4094,87380,1220608,4096,16384,1220608
-    setprop net.tcp.buffersize.edge     4093,26280,35040,4096,16384,35040
-    setprop net.tcp.buffersize.gprs     4092,8760,11680,4096,8760,11680
+    setprop net.tcp.buffersize.umts     58254,349525,1048576,58254,349525,1048576
+    setprop net.tcp.buffersize.hspa     40778,244668,734003,16777,100663,301990
+    setprop net.tcp.buffersize.hsupa    40778,244668,734003,16777,100663,301990
+    setprop net.tcp.buffersize.hsdpa    61167,367002,1101005,8738,52429,262114
+    setprop net.tcp.buffersize.hspap    122334,734003,2202010,32040,192239,576717
+    setprop net.tcp.buffersize.edge     4093,26280,70800,4096,16384,70800
+    setprop net.tcp.buffersize.gprs     4092,8760,48000,4096,8760,48000
     setprop net.tcp.buffersize.evdo     4094,87380,262144,4096,16384,262144
 
     class_start core
@@ -484,6 +491,7 @@ service netd /system/bin/netd
     socket netd stream 0660 root system
     socket dnsproxyd stream 0660 root inet
     socket mdns stream 0660 root system
+    socket fwmarkd stream 0660 root inet
 
 service debuggerd /system/bin/debuggerd
     class main

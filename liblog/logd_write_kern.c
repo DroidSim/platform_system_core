@@ -57,7 +57,9 @@ static int (*write_to_log)(log_id_t, struct iovec *vec, size_t nr) = __write_to_
 static pthread_mutex_t log_init_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
-#define UNUSED  __attribute__((__unused__))
+#ifndef __unused
+#define __unused  __attribute__((__unused__))
+#endif
 
 static int log_fds[(int)LOG_ID_MAX] = { -1, -1, -1, -1 };
 
@@ -81,8 +83,8 @@ int __android_log_dev_available(void)
     return (g_log_status == kLogAvailable);
 }
 
-static int __write_to_log_null(log_id_t log_fd UNUSED, struct iovec *vec UNUSED,
-                               size_t nr UNUSED)
+static int __write_to_log_null(log_id_t log_fd __unused, struct iovec *vec __unused,
+                               size_t nr __unused)
 {
     return -1;
 }
@@ -93,6 +95,9 @@ static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
     int log_fd;
 
     if (/*(int)log_id >= 0 &&*/ (int)log_id < (int)LOG_ID_MAX) {
+        if (log_id == LOG_ID_CRASH) {
+            log_id = LOG_ID_MAIN;
+        }
         log_fd = log_fds[(int)log_id];
     } else {
         return -EBADF;
@@ -169,6 +174,13 @@ int __android_log_write(int prio, const char *tag, const char *msg)
             snprintf(tmp_tag, sizeof(tmp_tag), "use-Rlog/RLOG-%s", tag);
             tag = tmp_tag;
     }
+
+#if __BIONIC__
+    if (prio == ANDROID_LOG_FATAL) {
+        extern void __android_set_abort_message(const char*);
+        __android_set_abort_message(msg);
+    }
+#endif
 
     vec[0].iov_base   = (unsigned char *) &prio;
     vec[0].iov_len    = 1;
@@ -270,8 +282,8 @@ void __android_log_assert(const char *cond, const char *tag,
     }
 
     __android_log_write(ANDROID_LOG_FATAL, tag, buf);
-
     __builtin_trap(); /* trap so we have a chance to debug the situation */
+    /* NOTREACHED */
 }
 
 int __android_log_bwrite(int32_t tag, const void *payload, size_t len)

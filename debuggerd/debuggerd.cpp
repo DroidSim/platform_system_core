@@ -51,99 +51,59 @@ struct debugger_request_t {
   pid_t pid, tid;
   uid_t uid, gid;
   uintptr_t abort_msg_address;
+  int32_t original_si_code;
 };
 
-static int write_string(const char* file, const char* string) {
-  int len;
-  int fd;
-  ssize_t amt;
-  fd = open(file, O_RDWR);
-  len = strlen(string);
-  if (fd < 0)
-    return -errno;
-  amt = write(fd, string, len);
-  close(fd);
-  return amt >= 0 ? 0 : -errno;
-}
-
-static void init_debug_led() {
-  // trout leds
-  write_string("/sys/class/leds/red/brightness", "0");
-  write_string("/sys/class/leds/green/brightness", "0");
-  write_string("/sys/class/leds/blue/brightness", "0");
-  write_string("/sys/class/leds/red/device/blink", "0");
-  // sardine leds
-  write_string("/sys/class/leds/left/cadence", "0,0");
-}
-
-static void enable_debug_led() {
-  // trout leds
-  write_string("/sys/class/leds/red/brightness", "255");
-  // sardine leds
-  write_string("/sys/class/leds/left/cadence", "1,0");
-}
-
-static void disable_debug_led() {
-  // trout leds
-  write_string("/sys/class/leds/red/brightness", "0");
-  // sardine leds
-  write_string("/sys/class/leds/left/cadence", "0,0");
-}
-
 static void wait_for_user_action(pid_t pid) {
-  // First log a helpful message
+  // Find out the name of the process that crashed.
+  char path[64];
+  snprintf(path, sizeof(path), "/proc/%d/exe", pid);
+
+  char exe[PATH_MAX];
+  int count;
+  if ((count = readlink(path, exe, sizeof(exe) - 1)) == -1) {
+    LOG("readlink('%s') failed: %s", path, strerror(errno));
+    strlcpy(exe, "unknown", sizeof(exe));
+  } else {
+    exe[count] = '\0';
+  }
+
+  // Turn "/system/bin/app_process" into "app_process".
+  // gdbserver doesn't cope with full paths (though we should fix that
+  // and remove this).
+  char* name = strrchr(exe, '/');
+  if (name == NULL) {
+    name = exe; // No '/' found.
+  } else {
+    ++name; // Skip the '/'.
+  }
+
+  // Explain how to attach the debugger.
   LOG(    "********************************************************\n"
-          "* Process %d has been suspended while crashing.  To\n"
-          "* attach gdbserver for a gdb connection on port 5039\n"
+          "* Process %d has been suspended while crashing.\n"
+          "* To attach gdbserver for a gdb connection on port 5039\n"
           "* and start gdbclient:\n"
           "*\n"
-          "*     gdbclient app_process :5039 %d\n"
+          "*     gdbclient %s :5039 %d\n"
           "*\n"
-          "* Wait for gdb to start, then press HOME or VOLUME DOWN key\n"
+          "* Wait for gdb to start, then press the VOLUME DOWN key\n"
           "* to let the process continue crashing.\n"
           "********************************************************\n",
-          pid, pid);
+          pid, name, pid);
 
-  // wait for HOME or VOLUME DOWN key
+  // Wait for VOLUME DOWN.
   if (init_getevent() == 0) {
-    int ms = 1200 / 10;
-    int dit = 1;
-    int dah = 3*dit;
-    int _       = -dit;
-    int ___     = 3*_;
-    int _______ = 7*_;
-    const int codes[] = {
-      dit,_,dit,_,dit,___,dah,_,dah,_,dah,___,dit,_,dit,_,dit,_______
-    };
-    size_t s = 0;
-    input_event e;
-    bool done = false;
-    init_debug_led();
-    enable_debug_led();
-    do {
-      int timeout = abs(codes[s]) * ms;
-      int res = get_event(&e, timeout);
-      if (res == 0) {
-        if (e.type == EV_KEY
-            && (e.code == KEY_HOME || e.code == KEY_VOLUMEDOWN)
-            && e.value == 0) {
-          done = true;
-        }
-      } else if (res == 1) {
-        if (++s >= sizeof(codes)/sizeof(*codes))
-          s = 0;
-        if (codes[s] > 0) {
-          enable_debug_led();
-        } else {
-          disable_debug_led();
+    while (true) {
+      input_event e;
+      if (get_event(&e, -1) == 0) {
+        if (e.type == EV_KEY && e.code == KEY_VOLUMEDOWN && e.value == 0) {
+          break;
         }
       }
-    } while (!done);
+    }
     uninit_getevent();
   }
 
-  // don't forget to turn debug led off
-  disable_debug_led();
   LOG("debuggerd resuming process %d", pid);
 }
 
@@ -218,6 +178,7 @@ static int read_request(int fd, debugger_request_t* out_request) {
   out_request->uid = cr.uid;
   out_request->gid = cr.gid;
   out_request->abort_msg_address = msg.abort_msg_address;
+  out_request->original_si_code = msg.original_si_code;
 
   if (msg.action == DEBUGGER_ACTION_CRASH) {
     // Ensure that the tid reported by the crashing process is valid.
@@ -302,9 +263,10 @@ static void handle_request(int fd) {
             case SIGSTOP:
               if (request.action == DEBUGGER_ACTION_DUMP_TOMBSTONE) {
                 XLOG("stopped -- dumping to tombstone\n");
-                tombstone_path = engrave_tombstone(
-                    request.pid, request.tid, signal, request.abort_msg_address, true, true,
-                    &detach_failed, &total_sleep_time_usec);
+                tombstone_path = engrave_tombstone(request.pid, request.tid,
+                                                   signal, request.original_si_code,
+                                                   request.abort_msg_address, true, true,
+                                                   &detach_failed, &total_sleep_time_usec);
               } else if (request.action == DEBUGGER_ACTION_DUMP_BACKTRACE) {
                 XLOG("stopped -- dumping to fd\n");
                 dump_backtrace(fd, -1, request.pid, request.tid, &detach_failed,
@@ -319,15 +281,16 @@ static void handle_request(int fd) {
               }
               break;
 
-            case SIGILL:
             case SIGABRT:
             case SIGBUS:
             case SIGFPE:
-            case SIGSEGV:
+            case SIGILL:
             case SIGPIPE:
+            case SIGSEGV:
 #ifdef SIGSTKFLT
             case SIGSTKFLT:
 #endif
+            case SIGTRAP:
               XLOG("stopped -- fatal signal\n");
               // Send a SIGSTOP to the process to make all of
               // the non-signaled threads stop moving.  Without
@@ -336,9 +299,10 @@ static void handle_request(int fd) {
               kill(request.pid, SIGSTOP);
               // don't dump sibling threads when attaching to GDB because it
               // makes the process less reliable, apparently...
-              tombstone_path = engrave_tombstone(
-                  request.pid, request.tid, signal, request.abort_msg_address, !attach_gdb,
-                  false, &detach_failed, &total_sleep_time_usec);
+              tombstone_path = engrave_tombstone(request.pid, request.tid,
+                                                 signal, request.original_si_code,
+                                                 request.abort_msg_address, !attach_gdb, false,
+                                                 &detach_failed, &total_sleep_time_usec);
               break;
 
             default:
@@ -402,38 +366,36 @@ static void handle_request(int fd) {
 }
 
 static int do_server() {
-  int s;
-  struct sigaction act;
-  int logsocket = -1;
-
-  // debuggerd crashes can't be reported to debuggerd.  Reset all of the
-  // crash handlers.
-  signal(SIGILL, SIG_DFL);
+  // debuggerd crashes can't be reported to debuggerd.
+  // Reset all of the crash handlers.
   signal(SIGABRT, SIG_DFL);
   signal(SIGBUS, SIG_DFL);
   signal(SIGFPE, SIG_DFL);
+  signal(SIGILL, SIG_DFL);
   signal(SIGSEGV, SIG_DFL);
 #ifdef SIGSTKFLT
   signal(SIGSTKFLT, SIG_DFL);
 #endif
+  signal(SIGTRAP, SIG_DFL);
 
   // Ignore failed writes to closed sockets
   signal(SIGPIPE, SIG_IGN);
 
-  logsocket = socket_local_client("logd", ANDROID_SOCKET_NAMESPACE_ABSTRACT, SOCK_DGRAM);
+  int logsocket = socket_local_client("logd", ANDROID_SOCKET_NAMESPACE_ABSTRACT, SOCK_DGRAM);
   if (logsocket < 0) {
     logsocket = -1;
   } else {
     fcntl(logsocket, F_SETFD, FD_CLOEXEC);
   }
 
+  struct sigaction act;
   act.sa_handler = SIG_DFL;
   sigemptyset(&act.sa_mask);
   sigaddset(&act.sa_mask,SIGCHLD);
   act.sa_flags = SA_NOCLDWAIT;
   sigaction(SIGCHLD, &act, 0);
 
-  s = socket_local_server(DEBUGGER_SOCKET_NAME, ANDROID_SOCKET_NAMESPACE_ABSTRACT, SOCK_STREAM);
+  int s = socket_local_server(DEBUGGER_SOCKET_NAME, ANDROID_SOCKET_NAMESPACE_ABSTRACT, SOCK_STREAM);
   if (s < 0)
     return 1;
   fcntl(s, F_SETFD, FD_CLOEXEC);

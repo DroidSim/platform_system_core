@@ -98,6 +98,7 @@ static int lookup_keyword(const char *s)
         if (!strcmp(s, "omainname")) return K_domainname;
         break;
     case 'e':
+        if (!strcmp(s, "nable")) return K_enable;
         if (!strcmp(s, "xec")) return K_exec;
         if (!strcmp(s, "xport")) return K_export;
         break;
@@ -759,7 +760,7 @@ static void parse_line_service(struct parse_state *state, int nargs, char **args
         break;
     case K_setenv: { /* name value */
         struct svcenvinfo *ei;
-        if (nargs < 2) {
+        if (nargs < 3) {
             parse_error(state, "setenv option requires name and value arguments\n");
             break;
         }

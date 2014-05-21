@@ -49,12 +49,15 @@ static int (*write_to_log)(log_id_t, struct iovec *vec, size_t nr) = __write_to_
 static pthread_mutex_t log_init_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
-#define UNUSED  __attribute__((__unused__))
+#ifndef __unused
+#define __unused  __attribute__((__unused__))
+#endif
 
-static int logd_fd = -1;
 #if FAKE_LOG_DEVICE
 #define WEAK __attribute__((weak))
-static int log_fds[(int)LOG_ID_MAX] = { -1, -1, -1, -1 };
+static int log_fds[(int)LOG_ID_MAX] = { -1, -1, -1, -1, -1 };
+#else
+static int logd_fd = -1;
 #endif
 
 /*
@@ -77,9 +80,10 @@ int __android_log_dev_available(void)
     return (g_log_status == kLogAvailable);
 }
 
+#if !FAKE_LOG_DEVICE
 /* give up, resources too limited */
-static int __write_to_log_null(log_id_t log_fd UNUSED, struct iovec *vec UNUSED,
-                               size_t nr UNUSED)
+static int __write_to_log_null(log_id_t log_fd __unused, struct iovec *vec __unused,
+                               size_t nr __unused)
 {
 #ifdef ANDROID_GNU_LINUX
     if (nr == 3) {
@@ -93,6 +97,7 @@ static int __write_to_log_null(log_id_t log_fd UNUSED, struct iovec *vec UNUSED,
     return -1;
 #endif
 }
+#endif
 
 /* log_init_lock assumed */
 static int __write_to_log_initialize()
@@ -162,9 +167,15 @@ static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
             ret = -errno;
         }
     } while (ret == -EINTR);
-
-    return ret;
 #else
+    static const unsigned header_length = 3;
+    struct iovec newVec[nr + header_length];
+    typeof_log_id_t log_id_buf;
+    uint16_t tid;
+    struct timespec ts;
+    log_time realtime_ts;
+    size_t i, payload_size;
+
     if (getuid() == AID_LOGD) {
         /*
          * ignore log messages we send to ourself.
@@ -197,29 +208,33 @@ static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
      *      };
      *  };
      */
-    static const unsigned header_length = 3;
-    struct iovec newVec[nr + header_length];
-    typeof_log_id_t log_id_buf = log_id;
-    uint16_t tid = gettid();
+
+    log_id_buf = log_id;
+    tid = gettid();
 
     newVec[0].iov_base   = (unsigned char *) &log_id_buf;
     newVec[0].iov_len    = sizeof_log_id_t;
     newVec[1].iov_base   = (unsigned char *) &tid;
     newVec[1].iov_len    = sizeof(tid);
 
-    struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
-    log_time realtime_ts;
     realtime_ts.tv_sec = ts.tv_sec;
     realtime_ts.tv_nsec = ts.tv_nsec;
 
     newVec[2].iov_base   = (unsigned char *) &realtime_ts;
     newVec[2].iov_len    = sizeof(log_time);
 
-    size_t i;
-    for (i = header_length; i < nr + header_length; i++) {
-        newVec[i].iov_base = vec[i-header_length].iov_base;
-        newVec[i].iov_len  = vec[i-header_length].iov_len;
+    for (payload_size = 0, i = header_length; i < nr + header_length; i++) {
+        newVec[i].iov_base = vec[i - header_length].iov_base;
+        payload_size += newVec[i].iov_len = vec[i - header_length].iov_len;
+
+        if (payload_size > LOGGER_ENTRY_MAX_PAYLOAD) {
+            newVec[i].iov_len -= payload_size - LOGGER_ENTRY_MAX_PAYLOAD;
+            if (newVec[i].iov_len) {
+                ++i;
+            }
+            break;
+        }
     }
 
     /*
@@ -228,7 +243,7 @@ static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
      * ENOTCONN occurs if logd dies.
      * EAGAIN occurs if logd is overloaded.
      */
-    ret = writev(logd_fd, newVec, nr + header_length);
+    ret = writev(logd_fd, newVec, i);
     if (ret < 0) {
         ret = -errno;
         if (ret == -ENOTCONN) {
@@ -250,8 +265,13 @@ static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
             }
         }
     }
-    return ret;
+
+    if (ret > (ssize_t)(sizeof_log_id_t + sizeof(tid) + sizeof(log_time))) {
+        ret -= sizeof_log_id_t + sizeof(tid) + sizeof(log_time);
+    }
 #endif
+
+    return ret;
 #endif
 }
 
@@ -260,7 +280,8 @@ static const char *LOG_NAME[LOG_ID_MAX] = {
     [LOG_ID_MAIN] = "main",
     [LOG_ID_RADIO] = "radio",
     [LOG_ID_EVENTS] = "events",
-    [LOG_ID_SYSTEM] = "system"
+    [LOG_ID_SYSTEM] = "system",
+    [LOG_ID_CRASH] = "crash"
 };
 
 const WEAK char *android_log_id_to_name(log_id_t log_id)
@@ -323,6 +344,13 @@ int __android_log_write(int prio, const char *tag, const char *msg)
             snprintf(tmp_tag, sizeof(tmp_tag), "use-Rlog/RLOG-%s", tag);
             tag = tmp_tag;
     }
+
+#if __BIONIC__
+    if (prio == ANDROID_LOG_FATAL) {
+        extern void __android_set_abort_message(const char*);
+        __android_set_abort_message(msg);
+    }
+#endif
 
     vec[0].iov_base   = (unsigned char *) &prio;
     vec[0].iov_len    = 1;
@@ -424,8 +452,8 @@ void __android_log_assert(const char *cond, const char *tag,
     }
 
     __android_log_write(ANDROID_LOG_FATAL, tag, buf);
-
     __builtin_trap(); /* trap so we have a chance to debug the situation */
+    /* NOTREACHED */
 }
 
 int __android_log_bwrite(int32_t tag, const void *payload, size_t len)

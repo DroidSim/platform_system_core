@@ -30,7 +30,7 @@
 #include <cutils/trace.h>
 
 #define LOG_TAG "cutils-trace"
-#include <cutils/log.h>
+#include <log/log.h>
 
 volatile int32_t        atrace_is_ready      = 0;
 int                     atrace_marker_fd     = -1;
@@ -93,7 +93,6 @@ static bool atrace_is_app_tracing_enabled()
 {
 #ifndef ANDROID_GNU_LINUX
     bool sys_debuggable = false;
-    bool proc_debuggable = false;
     char value[PROPERTY_VALUE_MAX];
     bool result = false;
 

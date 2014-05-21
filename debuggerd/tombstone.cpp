@@ -31,9 +31,10 @@
 
 #include <private/android_filesystem_config.h>
 
+#include <cutils/properties.h>
 #include <log/log.h>
 #include <log/logger.h>
-#include <cutils/properties.h>
+#include <log/logprint.h>
 
 #include <backtrace/Backtrace.h>
 #include <backtrace/BacktraceMap.h>
@@ -55,12 +56,12 @@
 // Must match the path defined in NativeCrashListener.java
 #define NCRASH_SOCKET_PATH "/data/system/ndebugsocket"
 
-static bool signal_has_address(int sig) {
+static bool signal_has_si_addr(int sig) {
   switch (sig) {
-    case SIGILL:
-    case SIGFPE:
-    case SIGSEGV:
     case SIGBUS:
+    case SIGFPE:
+    case SIGILL:
+    case SIGSEGV:
       return true;
     default:
       return false;
@@ -69,16 +70,17 @@ static bool signal_has_address(int sig) {
 
 static const char* get_signame(int sig) {
   switch(sig) {
-    case SIGILL: return "SIGILL";
     case SIGABRT: return "SIGABRT";
     case SIGBUS: return "SIGBUS";
     case SIGFPE: return "SIGFPE";
-    case SIGSEGV: return "SIGSEGV";
+    case SIGILL: return "SIGILL";
     case SIGPIPE: return "SIGPIPE";
-#ifdef SIGSTKFLT
+    case SIGSEGV: return "SIGSEGV";
+#if defined(SIGSTKFLT)
     case SIGSTKFLT: return "SIGSTKFLT";
 #endif
     case SIGSTOP: return "SIGSTOP";
+    case SIGTRAP: return "SIGTRAP";
     default: return "?";
   }
 }
@@ -97,13 +99,17 @@ static const char* get_sigcode(int signo, int code) {
         case ILL_COPROC: return "ILL_COPROC";
         case ILL_BADSTK: return "ILL_BADSTK";
       }
+      static_assert(NSIGILL == ILL_BADSTK, "missing ILL_* si_code");
       break;
     case SIGBUS:
       switch (code) {
         case BUS_ADRALN: return "BUS_ADRALN";
         case BUS_ADRERR: return "BUS_ADRERR";
         case BUS_OBJERR: return "BUS_OBJERR";
+        case BUS_MCEERR_AR: return "BUS_MCEERR_AR";
+        case BUS_MCEERR_AO: return "BUS_MCEERR_AO";
       }
+      static_assert(NSIGBUS == BUS_MCEERR_AO, "missing BUS_* si_code");
       break;
     case SIGFPE:
       switch (code) {
@@ -116,36 +122,36 @@ static const char* get_sigcode(int signo, int code) {
         case FPE_FLTINV: return "FPE_FLTINV";
         case FPE_FLTSUB: return "FPE_FLTSUB";
       }
+      static_assert(NSIGFPE == FPE_FLTSUB, "missing FPE_* si_code");
       break;
     case SIGSEGV:
       switch (code) {
         case SEGV_MAPERR: return "SEGV_MAPERR";
         case SEGV_ACCERR: return "SEGV_ACCERR";
       }
+      static_assert(NSIGSEGV == SEGV_ACCERR, "missing SEGV_* si_code");
       break;
     case SIGTRAP:
       switch (code) {
         case TRAP_BRKPT: return "TRAP_BRKPT";
         case TRAP_TRACE: return "TRAP_TRACE";
+        case TRAP_BRANCH: return "TRAP_BRANCH";
+        case TRAP_HWBKPT: return "TRAP_HWBKPT";
       }
+      static_assert(NSIGTRAP == TRAP_HWBKPT, "missing TRAP_* si_code");
       break;
   }
   // Then the other codes...
   switch (code) {
     case SI_USER: return "SI_USER";
-#if defined(SI_KERNEL)
     case SI_KERNEL: return "SI_KERNEL";
-#endif
     case SI_QUEUE: return "SI_QUEUE";
     case SI_TIMER: return "SI_TIMER";
     case SI_MESGQ: return "SI_MESGQ";
     case SI_ASYNCIO: return "SI_ASYNCIO";
-#if defined(SI_SIGIO)
     case SI_SIGIO: return "SI_SIGIO";
-#endif
-#if defined(SI_TKILL)
     case SI_TKILL: return "SI_TKILL";
-#endif
+    case SI_DETHREAD: return "SI_DETHREAD";
   }
   // Then give up...
   return "?";
@@ -167,20 +173,26 @@ static void dump_build_info(log_t* log) {
   _LOG(log, SCOPE_AT_FAULT, "Build fingerprint: '%s'\n", fingerprint);
 }
 
-static void dump_fault_addr(log_t* log, pid_t tid, int sig) {
+static void dump_signal_info(log_t* log, pid_t tid, int signal, int si_code) {
   siginfo_t si;
-
   memset(&si, 0, sizeof(si));
-  if (ptrace(PTRACE_GETSIGINFO, tid, 0, &si)){
+  if (ptrace(PTRACE_GETSIGINFO, tid, 0, &si) == -1) {
     _LOG(log, SCOPE_AT_FAULT, "cannot get siginfo: %s\n", strerror(errno));
-  } else if (signal_has_address(sig)) {
-    _LOG(log, SCOPE_AT_FAULT, "signal %d (%s), code %d (%s), fault addr %" PRIPTR "\n",
-         sig, get_signame(sig), si.si_code, get_sigcode(sig, si.si_code),
-         reinterpret_cast<uintptr_t>(si.si_addr));
-  } else {
-    _LOG(log, SCOPE_AT_FAULT, "signal %d (%s), code %d (%s), fault addr --------\n",
-         sig, get_signame(sig), si.si_code, get_sigcode(sig, si.si_code));
+    return;
   }
+
+  // bionic has to re-raise some signals, which overwrites the si_code with SI_TKILL.
+  si.si_code = si_code;
+
+  char addr_desc[32]; // ", fault addr 0x1234"
+  if (signal_has_si_addr(signal)) {
+    snprintf(addr_desc, sizeof(addr_desc), "%p", si.si_addr);
+  } else {
+    snprintf(addr_desc, sizeof(addr_desc), "--------");
+  }
+
+  _LOG(log, SCOPE_AT_FAULT, "signal %d (%s), code %d (%s), fault addr %s\n",
+       signal, get_signame(signal), si.si_code, get_sigcode(signal, si.si_code), addr_desc);
 }
 
 static void dump_thread_info(log_t* log, pid_t pid, pid_t tid, int scope_flags) {
@@ -345,7 +357,7 @@ static void dump_nearby_maps(BacktraceMap* map, log_t* log, pid_t tid, int scope
     _LOG(log, scope_flags, "cannot get siginfo for %d: %s\n", tid, strerror(errno));
     return;
   }
-  if (!signal_has_address(si.si_signo)) {
+  if (!signal_has_si_addr(si.si_signo)) {
     return;
   }
 
@@ -449,6 +461,8 @@ static bool dump_sibling_thread_report(
 // that don't match the specified pid, and writes them to the tombstone file.
 //
 // If "tail" is set, we only print the last few lines.
+static EventTagMap* g_eventTagMap = NULL;
+
 static void dump_log_file(log_t* log, pid_t pid, const char* filename,
   unsigned int tail) {
   bool first = true;
@@ -511,7 +525,28 @@ static void dump_log_file(log_t* log, pid_t pid, const char* filename,
     if (!hdr_size) {
       hdr_size = sizeof(log_entry.entry_v1);
     }
-    char* msg = (char *)log_entry.buf + hdr_size;
+    char* msg = reinterpret_cast<char*>(log_entry.buf) + hdr_size;
+
+    char timeBuf[32];
+    time_t sec = static_cast<time_t>(entry->sec);
+    struct tm tmBuf;
+    struct tm* ptm;
+    ptm = localtime_r(&sec, &tmBuf);
+    strftime(timeBuf, sizeof(timeBuf), "%m-%d %H:%M:%S", ptm);
+
+    if (log_entry.id() == LOG_ID_EVENTS) {
+      if (!g_eventTagMap) {
+        g_eventTagMap = android_openEventTagMap(EVENT_TAG_MAP_FILE);
+      }
+      AndroidLogEntry e;
+      char buf[512];
+      android_log_processBinaryLogBuffer(entry, &e, g_eventTagMap, buf, sizeof(buf));
+      _LOG(log, 0, "%s.%03d %5d %5d %c %-8s: %s\n",
+         timeBuf, entry->nsec / 1000000, entry->pid, entry->tid,
+         'I', e.tag, e.message);
+      continue;
+    }
+
     unsigned char prio = msg[0];
     char* tag = msg + 1;
     msg = tag + strlen(tag) + 1;
@@ -523,13 +558,6 @@ static void dump_log_file(log_t* log, pid_t pid, const char* filename,
     }
 
     char prioChar = (prio < strlen(kPrioChars) ? kPrioChars[prio] : '?');
-
-    char timeBuf[32];
-    time_t sec = static_cast<time_t>(entry->sec);
-    struct tm tmBuf;
-    struct tm* ptm;
-    ptm = localtime_r(&sec, &tmBuf);
-    strftime(timeBuf, sizeof(timeBuf), "%m-%d %H:%M:%S", ptm);
 
     // Look for line breaks ('\n') and display each text line
     // on a separate line, prefixed with the header, like logcat does.
@@ -555,6 +583,7 @@ static void dump_log_file(log_t* log, pid_t pid, const char* filename,
 static void dump_logs(log_t* log, pid_t pid, unsigned tail) {
   dump_log_file(log, pid, "system", tail);
   dump_log_file(log, pid, "main", tail);
+  dump_log_file(log, pid, "events", tail);
 }
 
 static void dump_abort_message(Backtrace* backtrace, log_t* log, uintptr_t address) {
@@ -584,8 +613,9 @@ static void dump_abort_message(Backtrace* backtrace, log_t* log, uintptr_t addre
 }
 
 // Dumps all information about the specified pid to the tombstone.
-static bool dump_crash(log_t* log, pid_t pid, pid_t tid, int signal, uintptr_t abort_msg_address,
-                       bool dump_sibling_threads, int* total_sleep_time_usec) {
+static bool dump_crash(log_t* log, pid_t pid, pid_t tid, int signal, int si_code,
+                       uintptr_t abort_msg_address, bool dump_sibling_threads,
+                       int* total_sleep_time_usec) {
   // don't copy log messages to tombstone unless this is a dev device
   char value[PROPERTY_VALUE_MAX];
   property_get("ro.debuggable", value, "0");
@@ -607,7 +637,7 @@ static bool dump_crash(log_t* log, pid_t pid, pid_t tid, int signal, uintptr_t a
   dump_revision_info(log);
   dump_thread_info(log, pid, tid, SCOPE_AT_FAULT);
   if (signal) {
-    dump_fault_addr(log, tid, signal);
+    dump_signal_info(log, tid, signal, si_code);
   }
 
   UniquePtr<BacktraceMap> map(BacktraceMap::Create(pid));
@@ -721,37 +751,44 @@ static int activity_manager_connect() {
   return amfd;
 }
 
-char* engrave_tombstone(
-    pid_t pid, pid_t tid, int signal, uintptr_t abort_msg_address, bool dump_sibling_threads,
-    bool quiet, bool* detach_failed, int* total_sleep_time_usec) {
+char* engrave_tombstone(pid_t pid, pid_t tid, int signal, int original_si_code,
+                        uintptr_t abort_msg_address, bool dump_sibling_threads, bool quiet,
+                        bool* detach_failed, int* total_sleep_time_usec) {
   if ((mkdir(TOMBSTONE_DIR, 0755) == -1) && (errno != EEXIST)) {
-      LOG("failed to create %s: %s\n", TOMBSTONE_DIR, strerror(errno));
+    LOG("failed to create %s: %s\n", TOMBSTONE_DIR, strerror(errno));
   }
 
   if (chown(TOMBSTONE_DIR, AID_SYSTEM, AID_SYSTEM) == -1) {
-      LOG("failed to change ownership of %s: %s\n", TOMBSTONE_DIR, strerror(errno));
+    LOG("failed to change ownership of %s: %s\n", TOMBSTONE_DIR, strerror(errno));
   }
 
-  if (selinux_android_restorecon(TOMBSTONE_DIR, 0) == -1) {
-    *detach_failed = false;
-    return NULL;
+  int fd = -1;
+  char* path = NULL;
+  if (selinux_android_restorecon(TOMBSTONE_DIR, 0) == 0) {
+    path = find_and_open_tombstone(&fd);
+  } else {
+    LOG("Failed to restore security context, not writing tombstone.\n");
   }
 
-  int fd;
-  char* path = find_and_open_tombstone(&fd);
-  if (!path) {
+  if (fd < 0 && quiet) {
+    LOG("Skipping tombstone write, nothing to do.\n");
     *detach_failed = false;
     return NULL;
   }
 
   log_t log;
   log.tfd = fd;
-  log.amfd = activity_manager_connect();
+  // Preserve amfd since it can be modified through the calls below without
+  // being closed.
+  int amfd = activity_manager_connect();
+  log.amfd = amfd;
   log.quiet = quiet;
-  *detach_failed = dump_crash(
-      &log, pid, tid, signal, abort_msg_address, dump_sibling_threads, total_sleep_time_usec);
+  *detach_failed = dump_crash(&log, pid, tid, signal, original_si_code, abort_msg_address,
+                              dump_sibling_threads, total_sleep_time_usec);
 
-  close(log.amfd);
+  // Either of these file descriptors can be -1, any error is ignored.
+  close(amfd);
   close(fd);
+
   return path;
 }

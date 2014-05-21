@@ -227,8 +227,9 @@ static void show_help(const char *cmd)
                     "  -T <count>      print only the most recent <count> lines (does not imply -d)\n"
                     "  -g              get the size of the log's ring buffer and exit\n"
                     "  -b <buffer>     Request alternate ring buffer, 'main', 'system', 'radio',\n"
-                    "                  'events' or 'all'. Multiple -b parameters are allowed and\n"
-                    "                  results are interleaved. The default is -b main -b system.\n"
+                    "                  'events', 'crash' or 'all'. Multiple -b parameters are\n"
+                    "                  allowed and results are interleaved. The default is\n"
+                    "                  -b main -b system -b crash.\n"
                     "  -B              output the log in binary.\n"
                     "  -S              output statistics.\n"
                     "  -G <size>       set size of log ring buffer, may suffix with K or M.\n"
@@ -280,7 +281,29 @@ static int setLogFormat(const char * formatString)
     return 0;
 }
 
-extern "C" void logprint_run_tests(void);
+static const char multipliers[][2] = {
+    { "" },
+    { "K" },
+    { "M" },
+    { "G" }
+};
+
+static unsigned long value_of_size(unsigned long value)
+{
+    for (unsigned i = 0;
+            (i < sizeof(multipliers)/sizeof(multipliers[0])) && (value >= 1024);
+            value /= 1024, ++i) ;
+    return value;
+}
+
+static const char *multiplier_of_size(unsigned long value)
+{
+    unsigned i;
+    for (i = 0;
+            (i < sizeof(multipliers)/sizeof(multipliers[0])) && (value >= 1024);
+            value /= 1024, ++i) ;
+    return multipliers[i];
+}
 
 int main(int argc, char **argv)
 {
@@ -304,11 +327,6 @@ int main(int argc, char **argv)
     signal(SIGPIPE, exit);
 
     g_logformat = android_log_format_new();
-
-    if (argc == 2 && 0 == strcmp(argv[1], "--test")) {
-        logprint_run_tests();
-        exit(0);
-    }
 
     if (argc == 2 && 0 == strcmp(argv[1], "--help")) {
         android::show_help(argv[0]);
@@ -447,8 +465,15 @@ int main(int argc, char **argv)
                     if (android_name_to_log_id("events") == LOG_ID_EVENTS) {
                         dev->next = new log_device_t("events", true, 'e');
                         if (dev->next) {
+                            dev = dev->next;
                             android::g_devCount++;
                             needBinary = true;
+                        }
+                    }
+                    if (android_name_to_log_id("crash") == LOG_ID_CRASH) {
+                        dev->next = new log_device_t("crash", false, 'c');
+                        if (dev->next) {
+                            android::g_devCount++;
                         }
                     }
                     break;
@@ -488,9 +513,6 @@ int main(int argc, char **argv)
                     android::g_logRotateSizeKBytes
                                 = DEFAULT_LOG_ROTATE_SIZE_KBYTES;
                 } else {
-                    long logRotateSize;
-                    char *lastDigit;
-
                     if (!isdigit(optarg[0])) {
                         fprintf(stderr,"Invalid parameter to -r\n");
                         android::show_help(argv[0]);
@@ -601,11 +623,20 @@ int main(int argc, char **argv)
     }
 
     if (!devices) {
-        devices = new log_device_t("main", false, 'm');
+        dev = devices = new log_device_t("main", false, 'm');
         android::g_devCount = 1;
         if (android_name_to_log_id("system") == LOG_ID_SYSTEM) {
-            devices->next = new log_device_t("system", false, 's');
+            dev = dev->next = new log_device_t("system", false, 's');
             android::g_devCount++;
+        }
+        if (android_name_to_log_id("crash") == LOG_ID_CRASH) {
+            dev = dev->next = new log_device_t("crash", false, 'c');
+            android::g_devCount++;
+        }
+        if (android_name_to_log_id("events") == LOG_ID_EVENTS) {
+            dev = dev->next = new log_device_t("events", true, 'e');
+            android::g_devCount++;
+            needBinary = true;
         }
     }
 
@@ -709,9 +740,10 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
             }
 
-            printf("%s: ring buffer is %ldKb (%ldKb consumed), "
+            printf("%s: ring buffer is %ld%sb (%ld%sb consumed), "
                    "max entry is %db, max payload is %db\n", dev->device,
-                   size / 1024, readable / 1024,
+                   value_of_size(size), multiplier_of_size(size),
+                   value_of_size(readable), multiplier_of_size(readable),
                    (int) LOGGER_ENTRY_MAX_LEN, (int) LOGGER_ENTRY_MAX_PAYLOAD);
         }
 

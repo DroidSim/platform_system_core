@@ -31,6 +31,7 @@ PidStatistics::PidStatistics(pid_t pid, char *name)
         , mSizes(0)
         , mElements(0)
         , name(name)
+        , mGone(false)
 { }
 
 #ifdef DO_NOT_ERROR_IF_PIDSTATISTICS_USES_A_COPY_CONSTRUCTOR
@@ -41,11 +42,26 @@ PidStatistics::PidStatistics(const PidStatistics &copy)
         , mElementsTotal(copy->mElementsTotal)
         , mSizes(copy->mSizes)
         , mElements(copy->mElements)
+        , mGone(copy->mGone)
 { }
 #endif
 
 PidStatistics::~PidStatistics() {
     free(name);
+}
+
+bool PidStatistics::pidGone() {
+    if (mGone) {
+        return true;
+    }
+    if (pid == gone) {
+        return true;
+    }
+    if (kill(pid, 0) && (errno != EPERM)) {
+        mGone = true;
+        return true;
+    }
+    return false;
 }
 
 void PidStatistics::setName(char *new_name) {
@@ -63,7 +79,7 @@ void PidStatistics::add(unsigned short size) {
 bool PidStatistics::subtract(unsigned short size) {
     mSizes -= size;
     --mElements;
-    return (mElements == 0) && kill(pid, 0) && (errno != EPERM);
+    return (mElements == 0) && pidGone();
 }
 
 void PidStatistics::addTotal(size_t size, size_t element) {
@@ -76,7 +92,7 @@ void PidStatistics::addTotal(size_t size, size_t element) {
 // must call free to release return value
 char *PidStatistics::pidToName(pid_t pid) {
     char *retval = NULL;
-    if (pid != PidStatistics::gone) {
+    if (pid != gone) {
         char buffer[512];
         snprintf(buffer, sizeof(buffer), "/proc/%u/cmdline", pid);
         int fd = open(buffer, O_RDONLY);
@@ -96,7 +112,9 @@ char *PidStatistics::pidToName(pid_t pid) {
 }
 
 UidStatistics::UidStatistics(uid_t uid)
-        : uid(uid) {
+        : uid(uid)
+        , mSizes(0)
+        , mElements(0) {
     Pids.clear();
 }
 
@@ -109,6 +127,9 @@ UidStatistics::~UidStatistics() {
 }
 
 void UidStatistics::add(unsigned short size, pid_t pid) {
+    mSizes += size;
+    ++mElements;
+
     PidStatistics *p;
     PidStatisticsCollection::iterator last;
     PidStatisticsCollection::iterator it;
@@ -116,18 +137,11 @@ void UidStatistics::add(unsigned short size, pid_t pid) {
         p = *it;
         if (pid == p->getPid()) {
             p->add(size);
-            // poor-man sort, bubble upwards if bigger than last
-            if ((last != it) && ((*last)->sizesTotal() < p->sizesTotal())) {
-                Pids.erase(it);
-                Pids.insert(last, p);
-            }
             return;
         }
     }
-    // poor-man sort, insert if bigger than last or last is the gone entry.
-    bool insert = (last != it)
-        && ((p->getPid() == p->gone)
-            || ((*last)->sizesTotal() < (size_t) size));
+    // insert if the gone entry.
+    bool insert = (last != it) && (p->getPid() == p->gone);
     p = new PidStatistics(pid, pidToName(pid));
     if (insert) {
         Pids.insert(last, p);
@@ -138,6 +152,9 @@ void UidStatistics::add(unsigned short size, pid_t pid) {
 }
 
 void UidStatistics::subtract(unsigned short size, pid_t pid) {
+    mSizes -= size;
+    --mElements;
+
     PidStatisticsCollection::iterator it;
     for (it = begin(); it != end(); ++it) {
         PidStatistics *p = *it;
@@ -166,28 +183,57 @@ void UidStatistics::subtract(unsigned short size, pid_t pid) {
     }
 }
 
+void UidStatistics::sort() {
+    for (bool pass = true; pass;) {
+        pass = false;
+        PidStatisticsCollection::iterator it = begin();
+        if (it != end()) {
+            PidStatisticsCollection::iterator lt = it;
+            PidStatistics *l = (*lt);
+            while (++it != end()) {
+                PidStatistics *n = (*it);
+                if ((n->getPid() != n->gone) && (n->sizes() > l->sizes())) {
+                    pass = true;
+                    Pids.erase(it);
+                    Pids.insert(lt, n);
+                    it = lt;
+                    n = l;
+                }
+                lt = it;
+                l = n;
+            }
+        }
+    }
+}
+
 size_t UidStatistics::sizes(pid_t pid) {
-    size_t sizes = 0;
+    if (pid == pid_all) {
+        return sizes();
+    }
+
     PidStatisticsCollection::iterator it;
     for (it = begin(); it != end(); ++it) {
         PidStatistics *p = *it;
-        if ((pid == pid_all) || (pid == p->getPid())) {
-            sizes += p->sizes();
+        if (pid == p->getPid()) {
+            return p->sizes();
         }
     }
-    return sizes;
+    return 0;
 }
 
 size_t UidStatistics::elements(pid_t pid) {
-    size_t elements = 0;
+    if (pid == pid_all) {
+        return elements();
+    }
+
     PidStatisticsCollection::iterator it;
     for (it = begin(); it != end(); ++it) {
         PidStatistics *p = *it;
-        if ((pid == pid_all) || (pid == p->getPid())) {
-            elements += p->elements();
+        if (pid == p->getPid()) {
+            return p->elements();
         }
     }
-    return elements;
+    return 0;
 }
 
 size_t UidStatistics::sizesTotal(pid_t pid) {
@@ -266,6 +312,29 @@ void LidStatistics::subtract(unsigned short size, uid_t uid, pid_t pid) {
     }
 }
 
+void LidStatistics::sort() {
+    for (bool pass = true; pass;) {
+        pass = false;
+        UidStatisticsCollection::iterator it = begin();
+        if (it != end()) {
+            UidStatisticsCollection::iterator lt = it;
+            UidStatistics *l = (*lt);
+            while (++it != end()) {
+                UidStatistics *n = (*it);
+                if (n->sizes() > l->sizes()) {
+                    pass = true;
+                    Uids.erase(it);
+                    Uids.insert(lt, n);
+                    it = lt;
+                    n = l;
+                }
+                lt = it;
+                l = n;
+            }
+        }
+    }
+}
+
 size_t LidStatistics::sizes(uid_t uid, pid_t pid) {
     size_t sizes = 0;
     UidStatisticsCollection::iterator it;
@@ -323,8 +392,8 @@ LogStatistics::LogStatistics()
 
     dgram_qlen_statistics = false;
     for(unsigned short bucket = 0; dgram_qlen(bucket); ++bucket) {
-        mMinimum[bucket].tv_sec = (uint32_t)-1;
-        mMinimum[bucket].tv_nsec = 999999999UL;
+        mMinimum[bucket].tv_sec = mMinimum[bucket].tv_sec_max;
+        mMinimum[bucket].tv_nsec = mMinimum[bucket].tv_nsec_max;
     }
 }
 
@@ -370,7 +439,7 @@ unsigned short LogStatistics::dgram_qlen(unsigned short bucket) {
 }
 
 unsigned long long LogStatistics::minimum(unsigned short bucket) {
-    if (mMinimum[bucket].tv_sec == LONG_MAX) {
+    if (mMinimum[bucket].tv_sec == mMinimum[bucket].tv_sec_max) {
         return 0;
     }
     return mMinimum[bucket].nsec();
@@ -455,13 +524,22 @@ void LogStatistics::format(char **buf,
     short spaces = 2;
 
     log_id_for_each(i) {
-        if (logMask & (1 << i)) {
-            oldLength = string.length();
-            if (spaces < 0) {
-                spaces = 0;
-            }
-            string.appendFormat("%*s%s", spaces, "", android_log_id_to_name(i));
-            spaces += spaces_total + oldLength - string.length();
+        if (!logMask & (1 << i)) {
+            continue;
+        }
+        oldLength = string.length();
+        if (spaces < 0) {
+            spaces = 0;
+        }
+        string.appendFormat("%*s%s", spaces, "", android_log_id_to_name(i));
+        spaces += spaces_total + oldLength - string.length();
+
+        LidStatistics &l = id(i);
+        l.sort();
+
+        UidStatisticsCollection::iterator iu;
+        for (iu = l.begin(); iu != l.end(); ++iu) {
+            (*iu)->sort();
         }
     }
 
@@ -597,8 +675,7 @@ void LogStatistics::format(char **buf,
                             sizes, sizesTotal);
 
             android::String8 pd("");
-            pd.appendFormat("%u%c", pid,
-                            (kill(pid, 0) && (errno != EPERM)) ? '?' : ' ');
+            pd.appendFormat("%u%c", pid, p->pidGone() ? '?' : ' ');
 
             string.appendFormat("\n%-7s%-*s %-7s%s",
                                 line ? "" : android_log_id_to_name(i),
@@ -703,14 +780,15 @@ void LogStatistics::format(char **buf,
             spaces = 0;
 
             uid_t u = up->getUid();
-            pid_t p = (*pt)->getPid();
+            PidStatistics *pp = *pt;
+            pid_t p = pp->getPid();
 
             intermediate = string.format(oneline
                                              ? ((p == PidStatistics::gone)
                                                  ? "%d/?"
-                                                 : "%d/%d")
+                                                 : "%d/%d%c")
                                              : "%d",
-                                         u, p);
+                                         u, p, pp->pidGone() ? '?' : '\0');
             string.appendFormat(first ? "\n%-12s" : "%-12s",
                                 intermediate.string());
             intermediate.clear();
@@ -747,8 +825,8 @@ void LogStatistics::format(char **buf,
             size_t gone_els = 0;
 
             for(; pt != up->end(); ++pt) {
-                PidStatistics *pp = *pt;
-                pid_t p = pp->getPid();
+                pp = *pt;
+                p = pp->getPid();
 
                 // If a PID no longer has any current logs, and is not
                 // active anymore, skip & report totals for gone.
@@ -760,7 +838,7 @@ void LogStatistics::format(char **buf,
                     continue;
                 }
                 els = pp->elements();
-                bool gone = kill(p, 0) && (errno != EPERM);
+                bool gone = pp->pidGone();
                 if (gone && (els == 0)) {
                     // ToDo: garbage collection: move this statistical bucket
                     //       from its current UID/PID to UID/? (races and

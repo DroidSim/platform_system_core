@@ -46,10 +46,6 @@ libbacktrace_shared_libraries_target := \
 	libcutils \
 	libgccdemangle \
 
-# To enable using libunwind on each arch, add it to this list.
-libunwind_architectures := arm arm64 mips x86 x86_64
-
-ifeq ($(TARGET_ARCH),$(filter $(TARGET_ARCH),$(libunwind_architectures)))
 libbacktrace_src_files += \
 	UnwindCurrent.cpp \
 	UnwindMap.cpp \
@@ -68,28 +64,6 @@ libbacktrace_shared_libraries_host := \
 libbacktrace_static_libraries_host := \
 	libcutils \
 
-else
-libbacktrace_src_files += \
-	Corkscrew.cpp \
-
-libbacktrace_c_includes := \
-	system/core/libcorkscrew \
-
-libbacktrace_shared_libraries := \
-	libcorkscrew \
-
-libbacktrace_shared_libraries_target += \
-	libdl \
-
-libbacktrace_ldlibs_host := \
-	-ldl \
-
-endif
-
-ifeq ($(TARGET_OS),gnu_linux)
-libbacktrace_ldlibs_target := -lpthread
-endif
-
 module := libbacktrace
 module_tag := optional
 build_type := target
@@ -97,6 +71,54 @@ build_target := SHARED_LIBRARY
 include $(LOCAL_PATH)/Android.build.mk
 build_type := host
 include $(LOCAL_PATH)/Android.build.mk
+
+# Don't build for unbundled branches
+ifeq (,$(TARGET_BUILD_APPS))
+#-------------------------------------------------------------------------
+# The libbacktrace library (libc++)
+#-------------------------------------------------------------------------
+libbacktrace_libc++_src_files := \
+	BacktraceImpl.cpp \
+	BacktraceMap.cpp \
+	BacktraceThread.cpp \
+	thread_utils.c \
+
+libbacktrace_libc++_shared_libraries_target := \
+	libcutils \
+	libgccdemangle \
+
+libbacktrace_libc++_src_files += \
+	UnwindCurrent.cpp \
+	UnwindMap.cpp \
+	UnwindPtrace.cpp \
+
+libbacktrace_libc++_c_includes := \
+	external/libunwind/include \
+
+libbacktrace_libc++_shared_libraries := \
+	libunwind \
+	libunwind-ptrace \
+
+libbacktrace_libc++_shared_libraries_host := \
+	liblog \
+
+libbacktrace_libc++_static_libraries_host := \
+	libcutils \
+
+libbacktrace_libc++_libc++ := true
+
+ifeq ($(TARGET_OS),gnu_linux)
+libbacktrace_libc++_ldlibs_target := -lpthread
+endif
+
+module := libbacktrace_libc++
+module_tag := optional
+build_type := target
+build_target := SHARED_LIBRARY
+include $(LOCAL_PATH)/Android.build.mk
+build_type := host
+include $(LOCAL_PATH)/Android.build.mk
+endif
 
 #-------------------------------------------------------------------------
 # The libbacktrace_test library needed by backtrace_test.
@@ -122,17 +144,8 @@ backtrace_test_cflags := \
 	-fno-builtin \
 	-O0 \
 	-g \
-	-DGTEST_HAS_STD_STRING \
-
-ifneq ($(TARGET_ARCH),arm64)
-backtrace_test_cflags += -fstack-protector-all
-else
-  $(info TODO: $(LOCAL_PATH)/Android.mk -fstack-protector not yet available for the AArch64 toolchain)
-  common_cflags += -fno-stack-protector
-endif # arm64
 
 backtrace_test_cflags_target := \
-	-DGTEST_OS_LINUX_ANDROID \
 	-DENABLE_PSS_TESTS \
 
 backtrace_test_src_files := \
@@ -140,10 +153,8 @@ backtrace_test_src_files := \
 	GetPss.cpp \
 	thread_utils.c \
 
-backtrace_test_ldlibs := \
-	-lpthread \
-
 backtrace_test_ldlibs_host := \
+	-lpthread \
 	-lrt \
 
 backtrace_test_shared_libraries := \
@@ -151,6 +162,9 @@ backtrace_test_shared_libraries := \
 	libbacktrace \
 
 backtrace_test_shared_libraries_target := \
+	libcutils \
+
+backtrace_test_static_libraries_host := \
 	libcutils \
 
 module := backtrace_test

@@ -16,14 +16,16 @@
 
 #include <ctype.h>
 #include <poll.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
+
 #include <cutils/sockets.h>
 
 #include "LogReader.h"
 #include "FlushCommand.h"
 
 LogReader::LogReader(LogBuffer *logbuf)
-        : SocketListener("logdr", true)
+        : SocketListener(getLogSocket(), true)
         , mLogbuf(*logbuf)
 { }
 
@@ -35,6 +37,8 @@ void LogReader::notifyNewLog() {
 }
 
 bool LogReader::onDataAvailable(SocketClient *cli) {
+    prctl(PR_SET_NAME, "logd.reader");
+
     char buffer[255];
 
     int len = read(cli->getSocket(), buffer, sizeof(buffer) - 1);
@@ -166,4 +170,17 @@ void LogReader::doSocketDelete(SocketClient *cli) {
         it++;
     }
     LogTimeEntry::unlock();
+}
+
+int LogReader::getLogSocket() {
+    static const char socketName[] = "logdr";
+    int sock = android_get_control_socket(socketName);
+
+    if (sock < 0) {
+        sock = socket_local_server(socketName,
+                                   ANDROID_SOCKET_NAMESPACE_RESERVED,
+                                   SOCK_SEQPACKET);
+    }
+
+    return sock;
 }

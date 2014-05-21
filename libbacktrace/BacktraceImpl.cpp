@@ -19,6 +19,7 @@
 #include <string.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #include <string>
@@ -59,8 +60,8 @@ Backtrace::~Backtrace() {
   }
 }
 
-bool Backtrace::Unwind(size_t num_ignore_frames) {
-  return impl_->Unwind(num_ignore_frames);
+bool Backtrace::Unwind(size_t num_ignore_frames, ucontext_t* ucontext) {
+  return impl_->Unwind(num_ignore_frames, ucontext);
 }
 
 extern "C" char* __cxa_demangle(const char* mangled, char* buf, size_t* len,

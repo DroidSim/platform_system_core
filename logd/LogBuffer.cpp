@@ -14,29 +14,121 @@
  * limitations under the License.
  */
 
+#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/user.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <cutils/properties.h>
 #include <log/logger.h>
 
 #include "LogBuffer.h"
+#include "LogReader.h"
 #include "LogStatistics.h"
 #include "LogWhiteBlackList.h"
-#include "LogReader.h"
 
 // Default
 #define LOG_BUFFER_SIZE (256 * 1024) // Tuned on a per-platform basis here?
 #define log_buffer_size(id) mMaxSize[id]
+#define LOG_BUFFER_MIN_SIZE (64 * 1024UL)
+#define LOG_BUFFER_MAX_SIZE (256 * 1024 * 1024UL)
+
+static bool valid_size(unsigned long value) {
+    if ((value < LOG_BUFFER_MIN_SIZE) || (LOG_BUFFER_MAX_SIZE < value)) {
+        return false;
+    }
+
+    long pages = sysconf(_SC_PHYS_PAGES);
+    if (pages < 1) {
+        return true;
+    }
+
+    long pagesize = sysconf(_SC_PAGESIZE);
+    if (pagesize <= 1) {
+        pagesize = PAGE_SIZE;
+    }
+
+    // maximum memory impact a somewhat arbitrary ~3%
+    pages = (pages + 31) / 32;
+    unsigned long maximum = pages * pagesize;
+
+    if ((maximum < LOG_BUFFER_MIN_SIZE) || (LOG_BUFFER_MAX_SIZE < maximum)) {
+        return true;
+    }
+
+    return value <= maximum;
+}
+
+static unsigned long property_get_size(const char *key) {
+    char property[PROPERTY_VALUE_MAX];
+    property_get(key, property, "");
+
+    char *cp;
+    unsigned long value = strtoul(property, &cp, 10);
+
+    switch(*cp) {
+    case 'm':
+    case 'M':
+        value *= 1024;
+    /* FALLTHRU */
+    case 'k':
+    case 'K':
+        value *= 1024;
+    /* FALLTHRU */
+    case '\0':
+        break;
+
+    default:
+        value = 0;
+    }
+
+    if (!valid_size(value)) {
+        value = 0;
+    }
+
+    return value;
+}
 
 LogBuffer::LogBuffer(LastLogTimes *times)
         : mTimes(*times) {
     pthread_mutex_init(&mLogElementsLock, NULL);
     dgram_qlen_statistics = false;
 
+    static const char global_tuneable[] = "persist.logd.size"; // Settings App
+    static const char global_default[] = "ro.logd.size";       // BoardConfig.mk
+
+    unsigned long default_size = property_get_size(global_tuneable);
+    if (!default_size) {
+        default_size = property_get_size(global_default);
+    }
+
     log_id_for_each(i) {
-        mMaxSize[i] = LOG_BUFFER_SIZE;
+        char key[PROP_NAME_MAX];
+
+        snprintf(key, sizeof(key), "%s.%s",
+                 global_tuneable, android_log_id_to_name(i));
+        unsigned long property_size = property_get_size(key);
+
+        if (!property_size) {
+            snprintf(key, sizeof(key), "%s.%s",
+                     global_default, android_log_id_to_name(i));
+            property_size = property_get_size(key);
+        }
+
+        if (!property_size) {
+            property_size = default_size;
+        }
+
+        if (!property_size) {
+            property_size = LOG_BUFFER_SIZE;
+        }
+
+        if (setSize(i, property_size)) {
+            setSize(i, LOG_BUFFER_MIN_SIZE);
+        }
     }
 }
 
@@ -165,19 +257,16 @@ void LogBuffer::prune(log_id_t id, unsigned long pruneRows) {
         size_t worst_sizes = 0;
         size_t second_worst_sizes = 0;
 
-        if (mPrune.worstUidEnabled()) {
+        if ((id != LOG_ID_CRASH) && mPrune.worstUidEnabled()) {
             LidStatistics &l = stats.id(id);
-            UidStatisticsCollection::iterator iu;
-            for (iu = l.begin(); iu != l.end(); ++iu) {
-                UidStatistics *u = (*iu);
-                size_t sizes = u->sizes();
-                if (worst_sizes < sizes) {
-                    second_worst_sizes = worst_sizes;
-                    worst_sizes = sizes;
-                    worst = u->getUid();
-                }
-                if ((second_worst_sizes < sizes) && (sizes < worst_sizes)) {
-                    second_worst_sizes = sizes;
+            l.sort();
+            UidStatisticsCollection::iterator iu = l.begin();
+            if (iu != l.end()) {
+                UidStatistics *u = *iu;
+                worst = u->getUid();
+                worst_sizes = u->sizes();
+                if (++iu != l.end()) {
+                    second_worst_sizes = (*iu)->sizes();
                 }
             }
         }
@@ -303,7 +392,7 @@ unsigned long LogBuffer::getSizeUsed(log_id_t id) {
 // set the total space allocated to "id"
 int LogBuffer::setSize(log_id_t id, unsigned long size) {
     // Reasonable limits ...
-    if ((size < (64 * 1024)) || ((256 * 1024 * 1024) < size)) {
+    if (!valid_size(size)) {
         return -1;
     }
     pthread_mutex_lock(&mLogElementsLock);

@@ -17,11 +17,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <poll.h>
 #include <signal.h>
 #include <stddef.h>
 #define NOMINMAX /* for windows to suppress definition of min in stdlib.h */
 #include <stdlib.h>
 #include <string.h>
+#include <sys/cdefs.h>
 #include <unistd.h>
 
 #include <cutils/list.h>
@@ -33,7 +35,9 @@
 #define min(x,y) ((y) ^ (((x) ^ (y)) & -((x) < (y))))
 
 #define WEAK __attribute__((weak))
-#define UNUSED __attribute__((unused))
+#ifndef __unused
+#define __unused __attribute__((unused))
+#endif
 
 /* Private copy of ../libcutils/socket_local_client.c prevent library loops */
 
@@ -141,11 +145,10 @@ error:
  * Used by AndroidSocketImpl
  */
 int WEAK socket_local_client_connect(int fd, const char *name, int namespaceId,
-                                     int type UNUSED)
+                                     int type __unused)
 {
     struct sockaddr_un addr;
     socklen_t alen;
-    size_t namelen;
     int err;
 
     err = socket_make_sockaddr_un(name, namespaceId, &addr, &alen);
@@ -196,7 +199,8 @@ static const char *LOG_NAME[LOG_ID_MAX] = {
     [LOG_ID_MAIN] = "main",
     [LOG_ID_RADIO] = "radio",
     [LOG_ID_EVENTS] = "events",
-    [LOG_ID_SYSTEM] = "system"
+    [LOG_ID_SYSTEM] = "system",
+    [LOG_ID_CRASH] = "crash",
 };
 
 const char *android_log_id_to_name(log_id_t log_id)
@@ -272,6 +276,8 @@ static ssize_t send_log_msg(struct logger *logger,
                             const char *msg, char *buf, size_t buf_size)
 {
     ssize_t ret;
+    size_t len;
+    char *cp;
     int errno_save = 0;
     int sock = socket_local_client("logd", ANDROID_SOCKET_NAMESPACE_RESERVED,
                                    SOCK_STREAM);
@@ -283,12 +289,44 @@ static ssize_t send_log_msg(struct logger *logger,
         snprintf(buf, buf_size, msg, logger ? logger->id : (unsigned) -1);
     }
 
-    ret = write(sock, buf, strlen(buf) + 1);
+    len = strlen(buf) + 1;
+    ret = TEMP_FAILURE_RETRY(write(sock, buf, len));
     if (ret <= 0) {
         goto done;
     }
 
-    ret = read(sock, buf, buf_size);
+    len = buf_size;
+    cp = buf;
+    while ((ret = TEMP_FAILURE_RETRY(read(sock, cp, len))) > 0) {
+        struct pollfd p;
+
+        if (((size_t)ret == len) || (buf_size < PAGE_SIZE)) {
+            break;
+        }
+
+        len -= ret;
+        cp += ret;
+
+        memset(&p, 0, sizeof(p));
+        p.fd = sock;
+        p.events = POLLIN;
+
+        /* Give other side 20ms to refill pipe */
+        ret = TEMP_FAILURE_RETRY(poll(&p, 1, 20));
+
+        if (ret <= 0) {
+            break;
+        }
+
+        if (!(p.revents & POLLIN)) {
+            ret = 0;
+            break;
+        }
+    }
+
+    if (ret >= 0) {
+        ret += buf_size - len;
+    }
 
 done:
     if ((ret == -1) && errno) {
@@ -373,7 +411,7 @@ long android_logger_get_log_readable_size(struct logger *logger)
 /*
  * returns the logger version
  */
-int android_logger_get_log_version(struct logger *logger UNUSED)
+int android_logger_get_log_version(struct logger *logger __unused)
 {
     return 3;
 }
@@ -384,7 +422,6 @@ int android_logger_get_log_version(struct logger *logger UNUSED)
 ssize_t android_logger_get_statistics(struct logger_list *logger_list,
                                       char *buf, size_t len)
 {
-    struct listnode *node;
     struct logger *logger;
     char *cp = buf;
     size_t remaining = len;
@@ -404,13 +441,13 @@ ssize_t android_logger_get_statistics(struct logger_list *logger_list,
     return send_log_msg(NULL, NULL, buf, len);
 }
 
-ssize_t android_logger_get_prune_list(struct logger_list *logger_list UNUSED,
+ssize_t android_logger_get_prune_list(struct logger_list *logger_list __unused,
                                       char *buf, size_t len)
 {
     return send_log_msg(NULL, "getPruneList", buf, len);
 }
 
-int android_logger_set_prune_list(struct logger_list *logger_list UNUSED,
+int android_logger_set_prune_list(struct logger_list *logger_list __unused,
                                   char *buf, size_t len)
 {
     const char cmd[] = "setPruneList ";
@@ -476,9 +513,7 @@ struct logger_list *android_logger_list_alloc_time(int mode,
 struct logger *android_logger_open(struct logger_list *logger_list,
                                    log_id_t id)
 {
-    struct listnode *node;
     struct logger *logger;
-    char *n;
 
     if (!logger_list || (id >= LOG_ID_MAX)) {
         goto err;
@@ -525,7 +560,7 @@ struct logger_list *android_logger_list_open(log_id_t id,
     return logger_list;
 }
 
-static void caught_signal(int signum UNUSED)
+static void caught_signal(int signum __unused)
 {
 }
 

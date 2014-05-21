@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <limits.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
@@ -31,7 +33,9 @@ LogListener::LogListener(LogBuffer *buf, LogReader *reader)
 {  }
 
 bool LogListener::onDataAvailable(SocketClient *cli) {
-    char buffer[sizeof_log_id_t + sizeof(log_time) + sizeof(char)
+    prctl(PR_SET_NAME, "logd.writer");
+
+    char buffer[sizeof_log_id_t + sizeof(uint16_t) + sizeof(log_time)
         + LOGGER_ENTRY_MAX_PAYLOAD];
     struct iovec iov = { buffer, sizeof(buffer) };
     memset(buffer, 0, sizeof(buffer));
@@ -97,17 +101,24 @@ bool LogListener::onDataAvailable(SocketClient *cli) {
 
     // NB: hdr.msg_flags & MSG_TRUNC is not tested, silently passing a
     // truncated message to the logs.
-    unsigned short len = n; // cap to internal maximum
-    if (len == n) {
-        logbuf->log(log_id, realtime, cred->uid, cred->pid, tid, msg, len);
-        reader->notifyNewLog();
-    }
+
+    logbuf->log(log_id, realtime, cred->uid, cred->pid, tid, msg,
+        ((size_t) n <= USHRT_MAX) ? (unsigned short) n : USHRT_MAX);
+    reader->notifyNewLog();
 
     return true;
 }
 
 int LogListener::getLogSocket() {
-    int sock = android_get_control_socket("logdw");
+    static const char socketName[] = "logdw";
+    int sock = android_get_control_socket(socketName);
+
+    if (sock < 0) {
+        sock = socket_local_server(socketName,
+                                   ANDROID_SOCKET_NAMESPACE_RESERVED,
+                                   SOCK_DGRAM);
+    }
+
     int on = 1;
     if (setsockopt(sock, SOL_SOCKET, SO_PASSCRED, &on, sizeof(on)) < 0) {
         return -1;
