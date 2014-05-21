@@ -84,6 +84,7 @@ static bool atrace_is_cmdline_match(const char* cmdline)
 
     return false;
 #else
+    (void)(cmdline);
     return false;
 #endif
 }
