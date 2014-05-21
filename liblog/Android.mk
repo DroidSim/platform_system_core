@@ -48,7 +48,9 @@ endif
 liblog_host_sources := $(liblog_sources) fake_log_device.c
 liblog_target_sources := $(liblog_sources) log_time.cpp
 ifneq ($(TARGET_USES_LOGD),false)
+ifneq ($(TARGET_OS),gnu_linux)
 liblog_target_sources += log_read.c
+endif
 else
 liblog_target_sources += log_read_kern.c
 endif

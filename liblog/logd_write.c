@@ -142,6 +142,9 @@ static int __write_to_log_initialize()
 static int __write_to_log_kernel(log_id_t log_id, struct iovec *vec, size_t nr)
 {
 #ifdef ANDROID_GNU_LINUX
+    (void)(log_id);
+    (void)(vec);
+    (void)(nr);
     return -1;
 #else
     ssize_t ret;
