@@ -31,6 +31,11 @@
 #include <cutils/atomic.h>
 #endif
 
+#ifdef ANDROID_GNU_LINUX
+#define PRId32 "d"
+#define PRId64 "lld"
+#endif
+
 __BEGIN_DECLS
 
 /**

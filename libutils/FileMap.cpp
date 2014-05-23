@@ -36,6 +36,10 @@
 #include <errno.h>
 #include <assert.h>
 
+#ifdef ANDROID_GNU_LINUX
+#define PRId64 "lld"
+#endif
+
 using namespace android;
 
 /*static*/ long FileMap::mPageSize = -1;

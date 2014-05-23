@@ -25,6 +25,10 @@
 #include <utils/Errors.h>
 #include <utils/Log.h>
 
+#ifdef ANDROID_GNU_LINUX
+#define PRIu32 "u"
+#endif
+
 namespace android {
 
 // BlobCache::Header::mMagicNumber value

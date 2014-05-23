@@ -17,6 +17,31 @@ LOCAL_PATH:= $(call my-dir)
 # libutils is a little unique: It's built twice, once for the host
 # and once for the device.
 
+ifeq ($(TARGET_OS),gnu_linux)
+commonSources:= \
+	BasicHashtable.cpp \
+	BlobCache.cpp \
+	FileMap.cpp \
+	JenkinsHash.cpp \
+	LinearAllocator.cpp \
+	LinearTransform.cpp \
+	Log.cpp \
+	Printer.cpp \
+	PropertyMap.cpp \
+	RefBase.cpp \
+	SharedBuffer.cpp \
+	Static.cpp \
+	StopWatch.cpp \
+	String8.cpp \
+	String16.cpp \
+	SystemClock.cpp \
+	Threads.cpp \
+	Timers.cpp \
+	Tokenizer.cpp \
+	Unicode.cpp \
+	VectorImpl.cpp \
+	misc.cpp
+else
 commonSources:= \
 	BasicHashtable.cpp \
 	BlobCache.cpp \
@@ -42,6 +67,7 @@ commonSources:= \
 	Unicode.cpp \
 	VectorImpl.cpp \
 	misc.cpp
+endif
 
 host_commonCflags := -DLIBUTILS_NATIVE=1 $(TOOL_CFLAGS)
 
@@ -114,7 +140,6 @@ LOCAL_STATIC_LIBRARIES := \
 
 ifeq ($(TARGET_OS),gnu_linux)
 LOCAL_SHARED_LIBRARIES := \
-        libbacktrace \
         liblog
 else
 LOCAL_SHARED_LIBRARIES := \
@@ -137,7 +162,6 @@ LOCAL_MODULE:= libutils
 LOCAL_WHOLE_STATIC_LIBRARIES := libutils
 ifeq ($(TARGET_OS),gnu_linux)
 LOCAL_SHARED_LIBRARIES := \
-        libbacktrace \
         libcutils \
         liblog
 LOCAL_LDLIBS := -lpthread
