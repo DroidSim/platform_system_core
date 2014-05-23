@@ -63,7 +63,9 @@ ifeq ($(build_type),target)
   ifneq ($($(module)_libc++),)
     include external/libcxx/libcxx.mk
   else
+ifneq ($(TARGET_OS),gnu_linux)
     include external/stlport/libstlport.mk
+endif
   endif
 
   include $(BUILD_$(build_target))
